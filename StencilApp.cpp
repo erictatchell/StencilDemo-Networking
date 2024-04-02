@@ -50,6 +50,12 @@ struct Packet {
 	std::string name;
 };
 
+enum class ControlledObject {
+	Skull1,
+	Skull2,
+	Car
+};
+ControlledObject mControlledObject = ControlledObject::Skull1;
 // Lightweight structure stores parameters to draw a shape.  This will
 // vary from app-to-app.
 struct RenderItem
@@ -62,6 +68,7 @@ struct RenderItem
 	XMFLOAT4X4 World = MathHelper::Identity4x4();
 
 	XMFLOAT4X4 TexTransform = MathHelper::Identity4x4();
+	//BoundingBox Bounds;
 
 	// Dirty flag indicating the object data has changed and we need to update the constant buffer.
 	// Because we have an object cbuffer for each FrameResource, we have to apply the
@@ -133,7 +140,7 @@ private:
 	void OnKeyboardInput(const GameTimer& gt);
 	void SendSkullPositionUpdate(const XMFLOAT3& skullPosition);
 	void UpdateSkullWorldMatrix(const XMFLOAT3& position, RenderItem* skullRitem, RenderItem* reflectedRitem, RenderItem* shadowedRitem);
-	void UpdateCubeWorldMatrix(const XMFLOAT3& position, RenderItem* skullRitem);
+	void UpdateCubeWorldMatrix(const XMFLOAT3& position, RenderItem* skullRitem, RenderItem* reflectedRitem);
 	void UpdateCamera(const GameTimer& gt);
 	void AnimateMaterials(const GameTimer& gt);
 	void UpdateObjectCBs(const GameTimer& gt);
@@ -142,8 +149,12 @@ private:
 	void UpdateMaterialCBs(const GameTimer& gt);
 	void UpdateMainPassCB(const GameTimer& gt);
 	void UpdateReflectedPassCB(const GameTimer& gt);
+	void BuildCarGeometry();
+	void UpdateCubeFaceReflection(RenderItem* cubeFaceRitem);
+	void SetFloorMatrix(const XMFLOAT3& position, RenderItem* carRitem, RenderItem* reflectedRitem);
 
 	void UpdatePosition(bool A, bool D, bool W, bool S, float dt, XMFLOAT3* position);
+	void UpdatePosition(bool A, bool D, bool W, bool S, float dt);
 	void UpdatePosition(Packet packet, float dt);
 	void UpdatePosition();
 	void ContinuousMovement(const GameTimer& gt);
@@ -168,6 +179,8 @@ private:
 	XMFLOAT3 skull1 = { 0.0f, 1.0f, -10.0f };
 	XMFLOAT3 skull2 = { 5.0f, 1.0f, -10.0f };
 	XMFLOAT3 cube1 = { 0.0f, 1.0f, 0.0f };
+	XMFLOAT3 car1 = { 0.0f, 1.0f, -10.0f };
+	XMFLOAT3 floor1 = { 0.0f, 1.0f, 0.0f };
 	RenderItem* mymSkullRitem;
 	RenderItem* mymReflectedSkullRitem;
 	RenderItem* mymShadowedSkullRitem;
@@ -195,6 +208,10 @@ private:
 
 	// Cache render items of interest.
 	RenderItem* mCubeRitem = nullptr;
+	RenderItem* mFloorItem = nullptr;
+	RenderItem* mReflectedFloorItem = nullptr;
+	RenderItem* mCarRitem = nullptr;
+	RenderItem* mReflectedCarRitem = nullptr;
 	RenderItem* mSkullRitem = nullptr;
 	RenderItem* mReflectedSkullRitem = nullptr;
 	RenderItem* mShadowedSkullRitem = nullptr;
@@ -347,6 +364,7 @@ bool StencilApp::Initialize()
 	BuildSkullGeometry();
 	BuildSkull2Geometry();
 	BuildCubeMirrorGeometry();
+	BuildCarGeometry();
 	BuildMaterials();
 	BuildRenderItems();
 	BuildFrameResources();
@@ -365,7 +383,8 @@ bool StencilApp::Initialize()
 
 	SendPacket(packet);
 
-	//UpdateCubeWorldMatrix(cube1, mCubeRitem);
+	UpdateCubeWorldMatrix(car1, mCarRitem, mReflectedCarRitem);
+	//SetFloorMatrix(floor1, mFloorItem, mReflectedFloorItem);
 	UpdateSkullWorldMatrix(skull1, mSkullRitem, mReflectedSkullRitem, mShadowedSkullRitem);
 	UpdateSkullWorldMatrix(skull2, mSkullRitem_2, mReflectedSkullRitem_2, mShadowedSkullRitem_2);
 
@@ -412,6 +431,7 @@ void StencilApp::Update(const GameTimer& gt)
 	UpdateMainPassCB(gt);
 	UpdateReflectedPassCB(gt);
 	ProcessMessages(receivedMessage);
+	//UpdateCubeFaceReflection(mCarRitem);
 
 	//UpdateGameState(gt);
 }
@@ -579,6 +599,46 @@ void StencilApp::UpdatePosition(bool A, bool D, bool W, bool S, float dt, XMFLOA
 		: UpdateSkullWorldMatrix(*skull, mSkullRitem, mReflectedSkullRitem, mShadowedSkullRitem);
 }
 
+void StencilApp::UpdatePosition(bool A, bool D, bool W, bool S, float dt)
+{
+	// Determine which object is currently controlled
+	XMFLOAT3* position;
+	switch (mControlledObject) {
+	case ControlledObject::Skull1:
+		position = &skull1;
+		break;
+	case ControlledObject::Skull2:
+		position = &skull2;
+		break;
+	case ControlledObject::Car:
+		position = &car1; // Assuming you have carPosition defined similarly to skull1 and skull2
+		break;
+	}
+
+	// Update the position based on input
+	if (A) position->x -= 1.0f * dt;
+	if (D) position->x += 1.0f * dt;
+	if (W) position->y += 1.0f * dt;
+	if (S) position->y -= 1.0f * dt;
+	position->y = MathHelper::Max(position->y, 0.0f);
+
+	// Call the appropriate function to update the world matrix
+	if (mControlledObject == ControlledObject::Car) {
+		UpdateCubeWorldMatrix(*position, mCarRitem, mReflectedCarRitem); // Assuming mCarRitem and mReflectedCarRitem are your car RenderItems
+	}
+	else {
+		// This assumes that skull objects are differentiated by an ID or a player variable.
+		// You may need to adjust based on your actual setup for identifying which skull is which.
+		if (mControlledObject == ControlledObject::Skull1) {
+			UpdateSkullWorldMatrix(*position, mSkullRitem, mReflectedSkullRitem, mShadowedSkullRitem);
+		}
+		else if (mControlledObject == ControlledObject::Skull2) {
+			UpdateSkullWorldMatrix(*position, mSkullRitem_2, mReflectedSkullRitem_2, mShadowedSkullRitem_2);
+		}
+	}
+}
+
+
 void StencilApp::UpdatePosition() {
 	XMFLOAT3* skull = (player == 1) ? &skull1 : &skull2;
 	skull->y = MathHelper::Max(skull->y, 0.0f);
@@ -638,12 +698,36 @@ void StencilApp::OnKeyboardInput(const GameTimer& gt)
 {
 	const float dt = gt.DeltaTime();
 
+	if (GetAsyncKeyState('1') & 0x8000) {
+		mControlledObject = ControlledObject::Skull1;
+	}
+	if (GetAsyncKeyState('2') & 0x8000) {
+		mControlledObject = ControlledObject::Skull2;
+	}
+	if (GetAsyncKeyState('3') & 0x8000) {
+		mControlledObject = ControlledObject::Car;
+	}
+
+
 	XMFLOAT3* currentSkullPosition = (player == 1) ? &skull1 : &skull2;
 
 	bool currentA = (GetAsyncKeyState('A') & 0x8000) != 0;
 	bool currentD = (GetAsyncKeyState('D') & 0x8000) != 0;
 	bool currentW = (GetAsyncKeyState('W') & 0x8000) != 0;
 	bool currentS = (GetAsyncKeyState('S') & 0x8000) != 0;
+
+	if (GetAsyncKeyState(VK_UP) & 0x8000)
+		mCamera.Walk(10.0f * dt);
+
+	if (GetAsyncKeyState(VK_DOWN) & 0x8000)
+		mCamera.Walk(-10.0f * dt);
+
+	if (GetAsyncKeyState(VK_LEFT) & 0x8000)
+		mCamera.Strafe(-10.0f * dt);
+
+	if (GetAsyncKeyState(VK_RIGHT) & 0x8000)
+		mCamera.Strafe(10.0f * dt);
+	mCamera.UpdateViewMatrix();
 
 	uint8_t newDirection = DetermineDirection(currentA, currentD, currentW, currentS);
 	bool justStartedMoving = !wasMoving && (currentA || currentD || currentW || currentS);
@@ -680,8 +764,20 @@ void StencilApp::OnKeyboardInput(const GameTimer& gt)
 	}
 
 	if (currentA || currentD || currentW || currentS) {
-		UpdatePosition(currentA, currentD, currentW, currentS, dt, currentSkullPosition);
+		// Update position based on the currently controlled object
+		switch (mControlledObject) {
+		case ControlledObject::Skull1:
+			UpdatePosition(currentA, currentD, currentW, currentS, dt);
+			break;
+		case ControlledObject::Skull2:
+			UpdatePosition(currentA, currentD, currentW, currentS, dt);
+			break;
+		case ControlledObject::Car:
+			UpdatePosition(currentA, currentD, currentW, currentS, dt); // Assuming carPosition is defined
+			break;
+		}
 	}
+
 
 	prevA = currentA;
 	prevD = currentD;
@@ -711,6 +807,29 @@ void StencilApp::SendSkullPositionUpdate(const XMFLOAT3& skullPosition)
 	//SendUDPMessage(clientSocket, msg.c_str(), "127.0.0.1", 8000);
 }
 
+void StencilApp::UpdateCubeFaceReflection(RenderItem* cubeFaceRitem)
+{
+	// Assume 'mCamera' is your Camera object and 'cubeFaceRitem' is one of the cube's faces
+	XMVECTOR camPosition = mCamera.GetPosition();
+	XMVECTOR camLook = mCamera.GetLook();
+	XMVECTOR camUp = mCamera.GetUp();
+
+	// Example for the front face
+	XMVECTOR faceNormal = XMVector3Normalize(camLook); // Adjust based on face orientation
+	float planeD = -XMVectorGetX(XMVector3Dot(faceNormal, camPosition)); // Adjust D based on your cube's position in the world
+	XMVECTOR reflectionPlane = XMVectorSetW(faceNormal, planeD);
+
+	// Create reflection matrix for this face
+	XMMATRIX reflectionMatrix = XMMatrixReflect(reflectionPlane);
+
+	// Apply the reflection matrix to the cube face's world matrix (or wherever appropriate)
+	XMStoreFloat4x4(&cubeFaceRitem->World, XMMatrixMultiply(XMLoadFloat4x4(&cubeFaceRitem->World), reflectionMatrix));
+
+	// Mark the item as dirty to update its buffer
+	cubeFaceRitem->NumFramesDirty = gNumFrameResources;
+}
+
+
 void StencilApp::UpdateSkullWorldMatrix(const XMFLOAT3& position, RenderItem* skullRitem, RenderItem* reflectedRitem, RenderItem* shadowedRitem)
 {
 	XMMATRIX skullRotate = XMMatrixRotationY(0.5f * MathHelper::Pi);
@@ -734,12 +853,12 @@ void StencilApp::UpdateSkullWorldMatrix(const XMFLOAT3& position, RenderItem* sk
 	shadowedRitem->NumFramesDirty = gNumFrameResources;
 }
 
-void StencilApp::UpdateCubeWorldMatrix(const XMFLOAT3& position, RenderItem* skullRitem)
+void StencilApp::UpdateCubeWorldMatrix(const XMFLOAT3& position, RenderItem* carRitem, RenderItem* reflectedRitem)
 {
-	XMMATRIX skullRotate = XMMatrixRotationY(0.5f * MathHelper::Pi);
-	XMMATRIX skullScale = XMMatrixScaling(0.45f, 0.45f, 0.45f);
-	XMMATRIX skullOffset = XMMatrixTranslation(position.x, position.y, position.z);
-	XMMATRIX skullWorld = skullRotate * skullScale * skullOffset;
+	XMMATRIX carRotate = XMMatrixRotationY(0.5f * MathHelper::Pi);
+	XMMATRIX carScale = XMMatrixScaling(0.45f, 0.45f, 0.45f);
+	XMMATRIX carOffset = XMMatrixTranslation(position.x, position.y, position.z);
+	XMMATRIX carWorld = carRotate * carScale * carOffset;
 
 	XMVECTOR mirrorPlane = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f); // xy plane
 	XMVECTOR shadowPlane = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f); // xz plane
@@ -748,14 +867,38 @@ void StencilApp::UpdateCubeWorldMatrix(const XMFLOAT3& position, RenderItem* sku
 	XMMATRIX S = XMMatrixShadow(shadowPlane, toMainLight);
 	XMMATRIX shadowOffsetY = XMMatrixTranslation(0.0f, 0.001f, 0.0f);
 
-	XMStoreFloat4x4(&skullRitem->World, skullWorld);
-	//XMStoreFloat4x4(&reflectedRitem->World, skullWorld * R);
+	XMStoreFloat4x4(&carRitem->World, carWorld);
+	XMStoreFloat4x4(&reflectedRitem->World, carWorld * R);
 	//XMStoreFloat4x4(&shadowedRitem->World, skullWorld * S * shadowOffsetY);
 
-	skullRitem->NumFramesDirty = gNumFrameResources;
-	//reflectedRitem->NumFramesDirty = gNumFrameResources;
+	carRitem->NumFramesDirty = gNumFrameResources;
+	reflectedRitem->NumFramesDirty = gNumFrameResources;
 	//shadowedRitem->NumFramesDirty = gNumFrameResources;
 }
+
+void StencilApp::SetFloorMatrix(const XMFLOAT3& position, RenderItem* carRitem, RenderItem* reflectedRitem)
+{
+	XMMATRIX carRotate = XMMatrixRotationY(0.5f * MathHelper::Pi);
+	XMMATRIX carScale = XMMatrixScaling(0.45f, 0.45f, 0.45f);
+	XMMATRIX carOffset = XMMatrixTranslation(position.x, position.y, position.z);
+	XMMATRIX carWorld = carRotate * carScale * carOffset;
+
+	XMVECTOR mirrorPlane = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f); // xy plane
+	XMVECTOR shadowPlane = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f); // xz plane
+	XMVECTOR toMainLight = -XMLoadFloat3(&mMainPassCB.Lights[0].Direction);
+	XMMATRIX R = XMMatrixReflect(mirrorPlane);
+	XMMATRIX S = XMMatrixShadow(shadowPlane, toMainLight);
+	XMMATRIX shadowOffsetY = XMMatrixTranslation(0.0f, 0.001f, 0.0f);
+
+	XMStoreFloat4x4(&carRitem->World, carWorld);
+	XMStoreFloat4x4(&reflectedRitem->World, carWorld * R);
+	//XMStoreFloat4x4(&shadowedRitem->World, skullWorld * S * shadowOffsetY);
+
+	carRitem->NumFramesDirty = gNumFrameResources;
+	reflectedRitem->NumFramesDirty = gNumFrameResources;
+	//shadowedRitem->NumFramesDirty = gNumFrameResources;
+}
+
 
 void StencilApp::AnimateMaterials(const GameTimer& gt)
 {
@@ -909,13 +1052,22 @@ void StencilApp::UpdateMainPassCB(const GameTimer& gt)
 	mMainPassCB.FarZ = 1000.0f;
 	mMainPassCB.TotalTime = gt.TotalTime();
 	mMainPassCB.DeltaTime = gt.DeltaTime();
-	mMainPassCB.AmbientLight = { 0.25f, 0.25f, 0.35f, 1.0f };
-	mMainPassCB.Lights[0].Direction = { 0.57735f, -0.57735f, 0.57735f };
-	mMainPassCB.Lights[0].Strength = { 0.6f, 0.6f, 0.6f };
-	mMainPassCB.Lights[1].Direction = { -0.57735f, -0.57735f, 0.57735f };
-	mMainPassCB.Lights[1].Strength = { 0.3f, 0.3f, 0.3f };
-	mMainPassCB.Lights[2].Direction = { 0.0f, -0.707f, -0.707f };
-	mMainPassCB.Lights[2].Strength = { 0.15f, 0.15f, 0.15f };
+	mMainPassCB.AmbientLight = { 0.05f, 0.05f, 0.05f, 1.0f }; // Soft, almost dark
+	mMainPassCB.Lights[0].Direction = { 0.57735f, -0.57735f, 0.57735f }; // Example: coming from a diagonal above
+	mMainPassCB.Lights[0].Strength = { 0.4f, 0.4f, 0.45f }; // Brighter, cool light for a clear, directional effect
+
+
+	mMainPassCB.Lights[1].Position = { 5.0f, 0.0f, 10.0f }; // Position it strategically
+	mMainPassCB.Lights[1].Strength = { 1.0f, 0.8f, 0.6f }; // Bright, warm color
+	mMainPassCB.Lights[1].FalloffStart = 0.5f; // Tighter radius
+	mMainPassCB.Lights[1].FalloffEnd = 25.0f; // Shorter reach
+
+	mMainPassCB.Lights[2].Position = { -10.0f, 10.0f, -10.0f }; // Adjust position as needed
+	mMainPassCB.Lights[2].Direction = { 0.57735f, -0.57735f, 0.57735f };
+	mMainPassCB.Lights[2].Strength = { 0.9f, 0.8f, 0.7f }; // Slightly warm
+	mMainPassCB.Lights[2].FalloffStart = 1.0f;
+	mMainPassCB.Lights[2].FalloffEnd = 100.0f;
+	mMainPassCB.Lights[2].SpotPower = 1.0f;
 
 	// Main pass stored in index 2
 	auto currPassCB = mCurrFrameResource->PassCB.get();
@@ -1102,33 +1254,62 @@ void StencilApp::BuildRoomGeometry()
 //
 //   |--------------|
 //   |              |
-//   |----|----|----|
-//   |Wall|Mirr|Wall|
-//   |    | or |    |
+//   |     ----     |
+//   |     Wall     |
+//   |              |
 //   /--------------/
 //  /   Floor      /
 // /--------------/
 	float mirrorOffset = 1.5f;
 
-	std::array<Vertex, 24> vertices =
+	std::array<Vertex, 36> vertices =
 	{
-		// Floor: Observe we tile texture coordinates.
-		Vertex(-7.0f, 0.0f, -15.0f, 0.0f, 1.0f, 0.0f, 0.0f, 4.0f), // 0 
-		Vertex(-7.0f, 0.0f,  0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f),
-		Vertex(11.0f, 0.0f,   0.0f, 0.0f, 1.0f, 0.0f, 4.0f, 0.0f),
-		Vertex(11.0f, 0.0f, -15.0f, 0.0f, 1.0f, 0.0f, 4.0f, 4.0f),
+		// Floor: Extended to Z = 15.0f from the origin
+		Vertex(-14.0f, 0.0f, -15.0f, 0.0f, 1.0f, 0.0f, 0.0f, 4.0f), // 0 
+		Vertex(-14.0f, 0.0f,  15.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f),
+		Vertex(22.0f, 0.0f,  15.0f, 0.0f, 1.0f, 0.0f, 4.0f, 0.0f),
+		Vertex(22.0f, 0.0f, -15.0f, 0.0f, 1.0f, 0.0f, 4.0f, 4.0f),
+
+		// Back Wall
+		Vertex(-14.0f,  10.0f, -15.0f, 0.0f, 1.0f, 0.0f, 0.0f, 2.0f), // 4 Top-left
+		Vertex(22.0f,  10.0f, -15.0f, 0.0f, 1.0f, 0.0f, 2.0f, 2.0f), // 5 Top-right
+		Vertex(22.0f,  0.0f, -15.0f,  0.0f, 1.0f, 0.0f, 2.0f, 0.0f), // 6 Bottom-right
+		Vertex(-14.0f,  0.0f, -15.0f,  0.0f, 1.0f, 0.0f, 0.0f, 0.0f), // 7 Bottom-left (reusing floor vertex)
+		// Front Wall
+		Vertex(-14.0f,  10.0f, 15.0f,  0.0f, 1.0f, 0.0f, 0.0f, 2.0f), // 8 Top-left
+		Vertex(22.0f,  10.0f, 15.0f,  0.0f, 1.0f, 0.0f, 2.0f, 2.0f), // 9 Top-right
+		Vertex(22.0f,  0.0f,  15.0f,  0.0f, 1.0f, 0.0f, 2.0f, 0.0f), // 10 Bottom-right (reusing floor vertex)
+		Vertex(-14.0f,  0.0f,  15.0f,  0.0f, 1.0f, 0.0f, 0.0f, 0.0f), // 11 Bottom-left (reusing floor vertex)
+		// Roof (corrected for CCW order when viewed from inside the room)
+		Vertex(-14.0f, 10.0f, -15.0f, 0.0f, 1.0f, 0.0f, 0.0f, 6.0f), // 12 Top-left
+		Vertex(-14.0f, 10.0f,  15.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f), // 13 Top-right
+		Vertex(22.0f, 10.0f,  15.0f, 0.0f, 1.0f, 0.0f, 6.0f, 0.0f), // 14 Bottom-right
+		Vertex(22.0f, 10.0f, -15.0f, 0.0f, 1.0f, 0.0f, 6.0f, 6.0f), // 15 Bottom-left
+
+
 	};
 
-	std::array<std::int16_t, 6> indices =
+
+	std::array<std::int16_t, 24> indices =
 	{
 		// Floor
 		0, 1, 2,
 		0, 2, 3,
 
+		// Back Wall
+		6, 5, 4,
+		6, 4, 7,
+		// Front Wall
+		8, 9, 10,
+		8, 10, 11,
+		// Roof
+		12, 13, 14,
+		12, 14, 15,
+
 	};
 
 	SubmeshGeometry floorSubmesh;
-	floorSubmesh.IndexCount = 6;
+	floorSubmesh.IndexCount = 36;
 	floorSubmesh.StartIndexLocation = 0;
 	floorSubmesh.BaseVertexLocation = 0;
 
@@ -1333,6 +1514,100 @@ void StencilApp::BuildSkull2Geometry()
 
 	mGeometries[geo->Name] = std::move(geo);
 }
+
+void StencilApp::BuildCarGeometry()
+{
+	std::ifstream fin("Models/car.txt");
+
+	if (!fin)
+	{
+		MessageBox(0, L"Models/car.txt not found.", 0, 0);
+		return;
+	}
+
+	UINT vcount = 0;
+	UINT tcount = 0;
+	std::string ignore;
+
+	fin >> ignore >> vcount;
+	fin >> ignore >> tcount;
+	fin >> ignore >> ignore >> ignore >> ignore;
+
+	XMFLOAT3 vMinf3(+MathHelper::Infinity, +MathHelper::Infinity, +MathHelper::Infinity);
+	XMFLOAT3 vMaxf3(-MathHelper::Infinity, -MathHelper::Infinity, -MathHelper::Infinity);
+
+	XMVECTOR vMin = XMLoadFloat3(&vMinf3);
+	XMVECTOR vMax = XMLoadFloat3(&vMaxf3);
+
+	std::vector<Vertex> vertices(vcount);
+	for (UINT i = 0; i < vcount; ++i)
+	{
+		fin >> vertices[i].Pos.x >> vertices[i].Pos.y >> vertices[i].Pos.z;
+		fin >> vertices[i].Normal.x >> vertices[i].Normal.y >> vertices[i].Normal.z;
+
+		XMVECTOR P = XMLoadFloat3(&vertices[i].Pos);
+
+		vertices[i].TexC = { 0.0f, 0.0f };
+
+		vMin = XMVectorMin(vMin, P);
+		vMax = XMVectorMax(vMax, P);
+	}
+
+	BoundingBox bounds;
+	XMStoreFloat3(&bounds.Center, 0.5f * (vMin + vMax));
+	XMStoreFloat3(&bounds.Extents, 0.5f * (vMax - vMin));
+
+	fin >> ignore;
+	fin >> ignore;
+	fin >> ignore;
+
+	std::vector<std::int32_t> indices(3 * tcount);
+	for (UINT i = 0; i < tcount; ++i)
+	{
+		fin >> indices[i * 3 + 0] >> indices[i * 3 + 1] >> indices[i * 3 + 2];
+	}
+
+	fin.close();
+
+	//
+	// Pack the indices of all the meshes into one index buffer.
+	//
+
+	const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
+
+	const UINT ibByteSize = (UINT)indices.size() * sizeof(std::int32_t);
+
+	auto geo = std::make_unique<MeshGeometry>();
+	geo->Name = "carGeo";
+
+	ThrowIfFailed(D3DCreateBlob(vbByteSize, &geo->VertexBufferCPU));
+	CopyMemory(geo->VertexBufferCPU->GetBufferPointer(), vertices.data(), vbByteSize);
+
+	ThrowIfFailed(D3DCreateBlob(ibByteSize, &geo->IndexBufferCPU));
+	CopyMemory(geo->IndexBufferCPU->GetBufferPointer(), indices.data(), ibByteSize);
+
+	geo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+		mCommandList.Get(), vertices.data(), vbByteSize, geo->VertexBufferUploader);
+
+	geo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+		mCommandList.Get(), indices.data(), ibByteSize, geo->IndexBufferUploader);
+
+	geo->VertexByteStride = sizeof(Vertex);
+	geo->VertexBufferByteSize = vbByteSize;
+	geo->IndexFormat = DXGI_FORMAT_R32_UINT;
+	geo->IndexBufferByteSize = ibByteSize;
+
+	SubmeshGeometry submesh;
+	submesh.IndexCount = (UINT)indices.size();
+	submesh.StartIndexLocation = 0;
+	submesh.BaseVertexLocation = 0;
+	submesh.Bounds = bounds;
+
+	geo->DrawArgs["car"] = submesh;
+
+	mGeometries[geo->Name] = std::move(geo);
+}
+
 void StencilApp::BuildSkullGeometry()
 {
 	std::ifstream fin("Models/skull.txt");
@@ -1432,6 +1707,7 @@ void StencilApp::BuildPSOs()
 		mShaders["opaquePS"]->GetBufferSize()
 	};
 	opaquePsoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+	opaquePsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
 	opaquePsoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
 	opaquePsoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
 	opaquePsoDesc.SampleMask = UINT_MAX;
@@ -1462,6 +1738,7 @@ void StencilApp::BuildPSOs()
 	transparencyBlendDesc.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
 	transparentPsoDesc.BlendState.RenderTarget[0] = transparencyBlendDesc;
+	transparentPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
 	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&transparentPsoDesc, IID_PPV_ARGS(&mPSOs["transparent"])));
 
 	//
@@ -1597,6 +1874,25 @@ void StencilApp::BuildMaterials()
 	icemirror->FresnelR0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
 	icemirror->Roughness = 0.5f;
 
+	auto gray0 = std::make_unique<Material>();
+	gray0->Name = "gray0";
+	gray0->MatCBIndex = 0;
+	gray0->DiffuseSrvHeapIndex = 0;
+	gray0->DiffuseAlbedo = XMFLOAT4(0.7f, 0.7f, 0.7f, 1.0f);
+	gray0->FresnelR0 = XMFLOAT3(0.04f, 0.04f, 0.04f);
+	gray0->Roughness = 0.0f;
+
+	auto highlight0 = std::make_unique<Material>();
+	highlight0->Name = "highlight0";
+	highlight0->MatCBIndex = 1;
+	highlight0->DiffuseSrvHeapIndex = 0;
+	highlight0->DiffuseAlbedo = XMFLOAT4(1.0f, 1.0f, 0.0f, 0.6f);
+	highlight0->FresnelR0 = XMFLOAT3(0.06f, 0.06f, 0.06f);
+	highlight0->Roughness = 0.0f;
+
+
+	mMaterials["gray0"] = std::move(gray0);
+	mMaterials["highlight0"] = std::move(highlight0);
 	auto skullMat = std::make_unique<Material>();
 	skullMat->Name = "skullMat";
 	skullMat->MatCBIndex = 3;
@@ -1698,12 +1994,13 @@ void StencilApp::BuildRenderItems()
 	floorRitem->World = MathHelper::Identity4x4();
 	floorRitem->TexTransform = MathHelper::Identity4x4();
 	floorRitem->ObjCBIndex = 0;
-	floorRitem->Mat = mMaterials["checkertile"].get();
+	floorRitem->Mat = mMaterials["icemirror"].get();
 	floorRitem->Geo = mGeometries["roomGeo"].get();
 	floorRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 	floorRitem->IndexCount = floorRitem->Geo->DrawArgs["floor"].IndexCount;
 	floorRitem->StartIndexLocation = floorRitem->Geo->DrawArgs["floor"].StartIndexLocation;
 	floorRitem->BaseVertexLocation = floorRitem->Geo->DrawArgs["floor"].BaseVertexLocation;
+	mFloorItem = floorRitem.get();
 	mRitemLayer[(int)RenderLayer::Opaque].push_back(floorRitem.get());
 
 	/*auto wallsRitem = std::make_unique<RenderItem>();
@@ -1740,6 +2037,8 @@ void StencilApp::BuildRenderItems()
 	reflectedSkullRitem->ObjCBIndex = 2;
 	mReflectedSkullRitem = reflectedSkullRitem.get();
 	mRitemLayer[(int)RenderLayer::Reflected].push_back(reflectedSkullRitem.get());
+	
+	
 
 	// Shadowed skull will have different world matrix, so it needs to be its own render item.
 	auto shadowedSkullRitem = std::make_unique<RenderItem>();
@@ -1790,6 +2089,31 @@ void StencilApp::BuildRenderItems()
 	mRitemLayer[(int)RenderLayer::Transparent].push_back(mirrorRitem.get());*/
 
 	
+	auto carRitem = std::make_unique<RenderItem>();
+	XMStoreFloat4x4(&carRitem->World, XMMatrixScaling(1.0f, 1.0f, 1.0f) * XMMatrixTranslation(0.0f, 1.0f, 0.0f));
+	XMStoreFloat4x4(&carRitem->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
+	carRitem->ObjCBIndex = 7;
+	carRitem->Mat = mMaterials["icemirror"].get();
+	carRitem->Geo = mGeometries["carGeo"].get();
+	carRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+	//carRitem->Bounds = carRitem->Geo->DrawArgs["car"].Bounds;
+	carRitem->IndexCount = carRitem->Geo->DrawArgs["car"].IndexCount;
+	carRitem->StartIndexLocation = carRitem->Geo->DrawArgs["car"].StartIndexLocation;
+	carRitem->BaseVertexLocation = carRitem->Geo->DrawArgs["car"].BaseVertexLocation;
+	mCarRitem = carRitem.get();
+	mRitemLayer[(int)RenderLayer::Opaque].push_back(carRitem.get());
+
+	auto reflectedCarRitem = std::make_unique<RenderItem>();
+	*reflectedCarRitem = *carRitem;
+	reflectedCarRitem->ObjCBIndex = 8;
+	mReflectedCarRitem = reflectedCarRitem.get();
+	mRitemLayer[(int)RenderLayer::Reflected].push_back(reflectedCarRitem.get());
+
+	auto reflectedFloor = std::make_unique<RenderItem>();
+	*reflectedFloor = *floorRitem;
+	reflectedFloor->ObjCBIndex = 9;
+	mReflectedFloorItem = reflectedFloor.get();
+	mRitemLayer[(int)RenderLayer::Reflected].push_back(reflectedFloor.get());
 
 	mAllRitems.push_back(std::move(floorRitem));
 	//mAllRitems.push_back(std::move(wallsRitem));
@@ -1799,13 +2123,18 @@ void StencilApp::BuildRenderItems()
 	mAllRitems.push_back(std::move(skullRitem2));
 	mAllRitems.push_back(std::move(reflectedSkullRitem2));
 	mAllRitems.push_back(std::move(shadowedSkullRitem2));
+	mAllRitems.push_back(std::move(carRitem));
+	mAllRitems.push_back(std::move(reflectedCarRitem));
+	mAllRitems.push_back(std::move(reflectedFloor));
 	//mAllRitems.push_back(std::move(mirrorRitem));
+
+
 
 	DirectX::XMMATRIX cubeWorld = XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(0.0f, 2.0f, 0.0f);
 
 	// Names for each face of the cube
 	std::string cubeFaceNames[6] = { "Front", "Back","Right", "Left", "Top", "Bottom"  };
-	UINT k = 7; // Starting Object Constant Buffer Index for cube faces
+	UINT k = 10; // Starting Object Constant Buffer Index for cube faces
 
 	for (int i = 0; i < 6; ++i) // Loop through all 6 faces
 	{
@@ -1814,7 +2143,7 @@ void StencilApp::BuildRenderItems()
 		// Set the world matrix for this cube face render item
 		XMStoreFloat4x4(&cubeFaceRitem->World, cubeWorld);
 		cubeFaceRitem->ObjCBIndex = k++; // Unique constant buffer index for each face
-		cubeFaceRitem->Mat = mMaterials["icemirror"].get(); // Assign material to this face
+		cubeFaceRitem->Mat = mMaterials["mirror" + cubeFaceNames[i]].get(); // Assign material to this face
 		cubeFaceRitem->Geo = mGeometries["cubeGeo"].get(); // Use the same geometry for all faces
 		cubeFaceRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 
@@ -1827,7 +2156,7 @@ void StencilApp::BuildRenderItems()
 		mRitemLayer[(int)RenderLayer::Transparent].push_back(cubeFaceRitem.get());
 		mRitemLayer[(int)RenderLayer::Mirrors].push_back(cubeFaceRitem.get());
 		mAllRitems.push_back(std::move(cubeFaceRitem));
-	}
+	}	
 }
 
 void StencilApp::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::vector<RenderItem*>& ritems)
