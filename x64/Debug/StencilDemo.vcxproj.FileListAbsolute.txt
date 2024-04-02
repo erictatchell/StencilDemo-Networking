@@ -1,0 +1,2 @@
+G:\My Drive\CST\Term-4\4995-Gaming\d3d12book\Chapter 11 Stenciling\StencilDemo\x64\Debug\StencilDemo.exe
+C:\Users\Eric\Desktop\stencildemo\Chapter 11 Stenciling\StencilDemo\x64\Debug\StencilDemo.exe
